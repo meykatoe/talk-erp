@@ -19,6 +19,9 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["http://localhost:5173"]
 
+    log_level: str = "INFO"
+    log_dir: str = "logs"
+
     @property
     def database_url(self) -> str:
         return (

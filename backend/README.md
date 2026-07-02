@@ -30,6 +30,15 @@ uvicorn app.main:app --reload
 | `GET /api/v1/inventory/low-stock` | 依產品彙總各倉庫庫存量，列出總量低於 `reorderpoint` 的品項 |
 | `GET /api/v1/sales/summary?month=YYYY-MM` | 該月總訂單數、總營收，並依產品類別列出營收排行 |
 
+## 日誌 Log
+
+- 全部請求會經 `RequestLoggingMiddleware` 記錄 method、path、status、耗時與 `request_id`（同步放進回應標頭 `X-Request-ID`，方便對照前端錯誤回報）。
+- `logs/app.log`：所有等級（依 `LOG_LEVEL` 設定），每日午夜輪替，保留 30 天。
+- `logs/error.log`：僅 ERROR 以上，未處理例外會附完整 traceback，方便快速定位 bug。
+- 主控台同步輸出，`--reload` 開發時可即時看到。
+- 可於 `.env` 調整 `LOG_LEVEL`（預設 `INFO`）與 `LOG_DIR`（預設 `logs`）。
+- 即時查看：`tail -f logs/app.log` 或只看錯誤 `tail -f logs/error.log`。
+
 ## 目錄結構
 
 ```
