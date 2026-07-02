@@ -15,9 +15,26 @@ SessionLocal = sessionmaker(
     bind=engine, autocommit=False, autoflush=False, future=True
 )
 
+# 唯讀帳號的獨立引擎，statement_timeout / read-only 已在資料庫角色層設定
+readonly_engine = create_engine(
+    settings.readonly_database_url, pool_pre_ping=True, future=True
+)
+
+ReadonlySessionLocal = sessionmaker(
+    bind=readonly_engine, autocommit=False, autoflush=False, future=True
+)
+
 
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_readonly_db() -> Generator[Session, None, None]:
+    db = ReadonlySessionLocal()
     try:
         yield db
     finally:
