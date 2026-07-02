@@ -315,6 +315,32 @@ button:disabled {
   background: #f3f4f6;
 }
 
+.chat-message-assistant:has(.data-table),
+.chat-message-assistant:has(.query-sql) {
+  max-width: 100%;
+}
+
+.query-sql {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.query-sql pre {
+  margin: 0.4rem 0 0;
+  padding: 0.6rem;
+  background: #1f2430;
+  color: #e2e8f0;
+  border-radius: 6px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-message-assistant .data-table {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+}
+
 .chat-input-bar {
   display: flex;
   gap: 0.6rem;
