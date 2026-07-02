@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_readonly_db
 from app.core.llm import LLMClient, get_llm_client
 from app.core.schema_context import SCHEMA_CONTEXT
-from app.core.sql_guard import UnsafeSQLError, ensure_safe_select
+from app.core.sql_guard import UnsafeSQLError, ensure_safe_select, find_unknown_tables
 from app.schemas.query import StructuredQueryRequest, StructuredQueryResponse
 
 router = APIRouter(prefix="/query", tags=["query"])
@@ -24,7 +24,7 @@ def _generate_and_run_sql(
 ) -> tuple[str, list[str], list[dict]]:
     previous_sql: str | None = None
     previous_error: str | None = None
-    last_exc: SQLAlchemyError | None = None
+    last_exc: Exception | None = None
 
     for attempt in range(1, MAX_SQL_ATTEMPTS + 1):
         try:
@@ -43,6 +43,21 @@ def _generate_and_run_sql(
                 exc,
             )
             raise HTTPException(status_code=422, detail=f"查詢無法執行：{exc}") from exc
+
+        unknown_tables = find_unknown_tables(safe_sql)
+        if unknown_tables:
+            reason = f"使用了不存在或未授權的資料表：{', '.join(unknown_tables)}"
+            logger.warning(
+                "SQL 引用未知資料表（第 %d/%d 次）question=%s sql=%s tables=%s",
+                attempt,
+                MAX_SQL_ATTEMPTS,
+                question,
+                safe_sql,
+                unknown_tables,
+            )
+            previous_sql, previous_error = safe_sql, reason
+            last_exc = UnsafeSQLError(reason)
+            continue
 
         try:
             result = db.execute(text(safe_sql))

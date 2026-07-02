@@ -2,8 +2,13 @@
 
 import re
 
+from app.core.schema_context import ALLOWED_TABLES
+
 _COMMENT_RE = re.compile(r"--|/\*")
 _LIMIT_RE = re.compile(r"\blimit\b", re.IGNORECASE)
+_TABLE_REF_RE = re.compile(
+    r"\b(?:from|join)\s+([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)", re.IGNORECASE
+)
 _FORBIDDEN_KEYWORDS = (
     "insert", "update", "delete", "drop", "alter", "truncate", "grant",
     "revoke", "create", "copy", "call", "execute", "merge", "vacuum",
@@ -40,3 +45,9 @@ def ensure_safe_select(sql: str, max_rows: int = 200) -> str:
         stripped = f"{stripped} LIMIT {max_rows}"
 
     return stripped
+
+
+def find_unknown_tables(sql: str) -> list[str]:
+    """找出 FROM/JOIN 裡不在白名單內的資料表（多半是 LLM 幻覺出來的表名）。"""
+    referenced = {match.group(1).lower() for match in _TABLE_REF_RE.finditer(sql)}
+    return sorted(referenced - ALLOWED_TABLES)

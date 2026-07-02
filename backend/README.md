@@ -36,11 +36,11 @@ uvicorn app.main:app --reload
 `POST /api/v1/query/structured`，body：`{"question": "2022年7月哪個產品類別銷售額最高"}`
 
 流程：
-1. LLM（`LLM_MODEL`，預設 `gpt-4o-mini`）依 `app/core/schema_context.py` 的白名單 schema 產生 SQL（structured output 限制只回傳 `{"sql": "..."}`）
-2. `app/core/sql_guard.py` 檢查：只允許單一條 `SELECT`/`WITH`、禁止修改語法與 SQL 註解、未帶 `LIMIT` 時自動補 `LIMIT 200`
+1. LLM（`LLM_MODEL`，預設 `gpt-4o-mini`）依 `app/core/schema_context.py` 的白名單 schema 產生 SQL（structured output 限制只回傳 `{"sql": "..."}`），system prompt 附帶別名/JOIN 規則與 2 組 few-shot 範例，降低幻覈欄位或搞混別名的機率
+2. `app/core/sql_guard.py` 檢查：只允許單一條 `SELECT`/`WITH`、禁止修改語法與 SQL 註解、未帶 `LIMIT` 時自動補 `LIMIT 200`，並用 `find_unknown_tables` 靜態比對 `FROM`/`JOIN` 是否都在白名單內（不用等資料庫報錯）
 3. 用唯讀帳號 `talkerp_readonly`（`POSTGRES_READONLY_USER`）執行查詢，該帳號僅有 `person`/`production`/`sales` schema 的 `SELECT` 權限，並在角色層設定 `statement_timeout=5s`、`default_transaction_read_only=on`，即使檢查有漏洞資料庫也擋得住
-4. 執行失敗時會把錯誤訊息回饋給 LLM 重新產生一次 SQL（最多 2 次嘗試）
-5. 查詢結果連同問題丟回 LLM，生成繁體中文的自然語言回答
+4. SQL 引用未知資料表或執行失敗時，會把原因回饋給 LLM 重新產生一次 SQL（最多 2 次嘗試）
+5. 查詢結果（最多取前 20 筆）連同問題丟回 LLM，生成繁體中文的自然語言回答；兩次 LLM 呼叫都設了 `max_tokens` 上限（SQL 500、回答 300）控制成本
 
 若要重建 `talkerp_readonly` 角色：
 

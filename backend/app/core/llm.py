@@ -15,8 +15,17 @@ _SQL_SYSTEM_PROMPT = """你是 PostgreSQL 專家，負責把使用者的自然�
 2. 只能產生單一條 SELECT 敘述（可用 WITH CTE），禁止任何會修改資料的語法
 3. 資料表需加上 schema 前綴（例如 sales.salesorderheader）
 4. 只回傳 SQL 本身，不要加上任何說明文字、markdown 或 SQL 註解
+5. 每個別名只能引用「該別名對應表格實際擁有」的欄位；欄位屬於別的表格時要先 JOIN 到那張表，不可憑印象假設某別名有其他表格的欄位
+6. 需要用到 CTE 以外的衍生欄位（例如分類名稱）時，該欄位必須先在 CTE 的 SELECT 中列出並往上層傳遞，不可在上層直接引用 CTE 沒有輸出的欄位
 
 {schema}
+
+範例（示範正確的別名與 JOIN 寫法）：
+問題：各產品類別的銷售總額
+SQL：SELECT pc.name AS category_name, SUM(sod.unitprice * sod.orderqty * (1 - sod.unitpricediscount)) AS total_sales FROM production.productcategory pc JOIN production.productsubcategory ps ON ps.productcategoryid = pc.productcategoryid JOIN production.product p ON p.productsubcategoryid = ps.productsubcategoryid JOIN sales.salesorderdetail sod ON sod.productid = p.productid GROUP BY pc.name ORDER BY total_sales DESC
+
+問題：哪些客戶的訂單總金額超過 5000
+SQL：SELECT so.customerid, SUM(so.totaldue) AS total_due FROM sales.salesorderheader so GROUP BY so.customerid HAVING SUM(so.totaldue) > 5000 ORDER BY total_due DESC
 """
 
 _ANSWER_SYSTEM_PROMPT = """你是 ERP 系統的資料助理，請根據 SQL 查詢結果，用繁體中文簡潔地回答使用者的問題。
@@ -83,12 +92,13 @@ class OpenAILLMClient:
                 },
             },
             temperature=0,
+            max_tokens=500,
         )
         content = response.choices[0].message.content or "{}"
         return json.loads(content)["sql"]
 
     def generate_answer(self, question: str, sql: str, rows: list[dict]) -> str:
-        payload = json.dumps(rows[:50], ensure_ascii=False, default=str)
+        payload = json.dumps(rows[:20], ensure_ascii=False, default=str)
         response = self._client.chat.completions.create(
             model=self._model,
             messages=[
@@ -97,11 +107,12 @@ class OpenAILLMClient:
                     "role": "user",
                     "content": (
                         f"問題：{question}\nSQL：{sql}\n"
-                        f"查詢結果（JSON，最多 50 筆）：{payload}"
+                        f"查詢結果（JSON，最多 20 筆）：{payload}"
                     ),
                 },
             ],
             temperature=0.2,
+            max_tokens=300,
         )
         return response.choices[0].message.content or ""
 

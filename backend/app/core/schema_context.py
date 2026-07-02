@@ -1,5 +1,21 @@
 """餵給 LLM 的資料表白名單與描述，只涵蓋 Text-to-SQL 允許查詢的範圍。"""
 
+ALLOWED_TABLES = frozenset(
+    {
+        "person.businessentity",
+        "person.person",
+        "sales.store",
+        "sales.customer",
+        "production.productcategory",
+        "production.productsubcategory",
+        "production.product",
+        "production.location",
+        "production.productinventory",
+        "sales.salesorderheader",
+        "sales.salesorderdetail",
+    }
+)
+
 SCHEMA_CONTEXT = """\
 可用資料表（PostgreSQL，欄位名稱皆為小寫，須使用 schema 前綴）：
 
