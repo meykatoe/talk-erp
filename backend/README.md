@@ -29,6 +29,29 @@ uvicorn app.main:app --reload
 | `GET /api/v1/orders?customer_id=xxx` | 訂單清單，可選依客戶篩選 |
 | `GET /api/v1/inventory/low-stock` | 依產品彙總各倉庫庫存量，列出總量低於 `reorderpoint` 的品項 |
 | `GET /api/v1/sales/summary?month=YYYY-MM` | 該月總訂單數、總營收，並依產品類別列出營收排行 |
+| `POST /api/v1/query/structured` | Text-to-SQL：自然語言問題 → LLM 產生 SQL → 唯讀執行 → LLM 生成回答 |
+
+## Text-to-SQL（階段三）
+
+`POST /api/v1/query/structured`，body：`{"question": "2022年7月哪個產品類別銷售額最高"}`
+
+流程：
+1. LLM（`LLM_MODEL`，預設 `gpt-4o-mini`）依 `app/core/schema_context.py` 的白名單 schema 產生 SQL（structured output 限制只回傳 `{"sql": "..."}`）
+2. `app/core/sql_guard.py` 檢查：只允許單一條 `SELECT`/`WITH`、禁止修改語法與 SQL 註解、未帶 `LIMIT` 時自動補 `LIMIT 200`
+3. 用唯讀帳號 `talkerp_readonly`（`POSTGRES_READONLY_USER`）執行查詢，該帳號僅有 `person`/`production`/`sales` schema 的 `SELECT` 權限，並在角色層設定 `statement_timeout=5s`、`default_transaction_read_only=on`，即使檢查有漏洞資料庫也擋得住
+4. 執行失敗時會把錯誤訊息回饋給 LLM 重新產生一次 SQL（最多 2 次嘗試）
+5. 查詢結果連同問題丟回 LLM，生成繁體中文的自然語言回答
+
+若要重建 `talkerp_readonly` 角色：
+
+```sql
+CREATE ROLE talkerp_readonly LOGIN PASSWORD '...';
+GRANT CONNECT ON DATABASE talkerp TO talkerp_readonly;
+GRANT USAGE ON SCHEMA person, production, sales TO talkerp_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA person, production, sales TO talkerp_readonly;
+ALTER ROLE talkerp_readonly SET statement_timeout = '5s';
+ALTER ROLE talkerp_readonly SET default_transaction_read_only = on;
+```
 
 ## 日誌 Log
 
@@ -58,4 +81,4 @@ app/
 | 庫存 | production.location, production.productinventory |
 | 訂單 | sales.salesorderheader, sales.salesorderdetail |
 
-尚未實作任何 LLM 相關功能（階段三、四、五），需要 API key 後再繼續。
+階段三 Text-to-SQL 已完成，階段四（RAG 文件問答）、階段五（意圖路由）尚未實作。
