@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { postStructuredQuery } from '../api/query';
 import { DataTable } from '../components/common/DataTable';
+import { downloadCsv } from '../utils/csv';
+
+const ROW_PREVIEW_LIMIT = 5;
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -68,13 +71,39 @@ export function QueryPage() {
                 <pre>{message.sql}</pre>
               </details>
             )}
-            {message.rows && message.rows.length > 0 && message.columns && (
-              <DataTable
-                columns={message.columns.map((col) => ({ key: col, header: col }))}
-                rows={message.rows.map((row, rowIndex) => ({ ...row, __rowKey: rowIndex }))}
-                rowKey={(row) => row.__rowKey as number}
-              />
-            )}
+            {message.rows &&
+              message.rows.length > 0 &&
+              message.columns &&
+              (() => {
+                const columns = message.columns as string[];
+                const rows = message.rows as Record<string, unknown>[];
+                const isTruncated = rows.length > ROW_PREVIEW_LIMIT;
+                const previewRows = isTruncated ? rows.slice(0, ROW_PREVIEW_LIMIT) : rows;
+
+                return (
+                  <>
+                    <DataTable
+                      columns={columns.map((col) => ({ key: col, header: col }))}
+                      rows={previewRows.map((row, rowIndex) => ({ ...row, __rowKey: rowIndex }))}
+                      rowKey={(row) => row.__rowKey as number}
+                    />
+                    {isTruncated && (
+                      <div className="query-result-footer">
+                        <span>
+                          僅顯示前 {ROW_PREVIEW_LIMIT} 筆，共 {rows.length} 筆
+                        </span>
+                        <button
+                          type="button"
+                          className="download-link"
+                          onClick={() => downloadCsv(`query-result-${index}.csv`, columns, rows)}
+                        >
+                          下載完整資料（CSV）
+                        </button>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
           </div>
         ))}
         {loading && <p className="status status-loading">查詢中…</p>}
