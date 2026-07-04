@@ -7,6 +7,7 @@ from typing import NamedTuple, Protocol
 from openai import OpenAI
 
 from app.core.config import Settings, get_settings
+from app.schemas.query import ConversationTurn
 
 _SQL_SYSTEM_PROMPT = """你是 ERP 系統的 Text-to-SQL 助理，只負責把「跟訂單、客戶、產品、庫存、銷售等 ERP 資料庫查詢相關」的問題轉換成 PostgreSQL SQL。
 
@@ -21,6 +22,7 @@ SQL 規則：
 4. sql 欄位只放 SQL 本身，不要加上任何說明文字、markdown 或 SQL 註解
 5. 每個別名只能引用「該別名對應表格實際擁有」的欄位；欄位屬於別的表格時要先 JOIN 到那張表，不可憑印象假設某別名有其他表格的欄位
 6. 需要用到 CTE 以外的衍生欄位（例如分類名稱）時，該欄位必須先在 CTE 的 SELECT 中列出並往上層傳遞，不可在上層直接引用 CTE 沒有輸出的欄位
+7. 對話中之前的問題與回答（如果有）可作為上下文，使用者的後續提問可能是針對前一題的追問或延伸（例如先問「6月銷售情況」，接著問「平均值呢」，就是要問 6 月銷售額的平均值），請依照對話脈絡推斷完整意圖再產生 SQL
 
 {schema}
 
@@ -54,6 +56,7 @@ class LLMClient(Protocol):
         self,
         question: str,
         schema_context: str,
+        history: list[ConversationTurn] | None = None,
         previous_sql: str | None = None,
         previous_error: str | None = None,
     ) -> SqlGeneration: ...
@@ -70,6 +73,7 @@ class OpenAILLMClient:
         self,
         question: str,
         schema_context: str,
+        history: list[ConversationTurn] | None = None,
         previous_sql: str | None = None,
         previous_error: str | None = None,
     ) -> SqlGeneration:
@@ -78,8 +82,12 @@ class OpenAILLMClient:
                 "role": "system",
                 "content": _SQL_SYSTEM_PROMPT.format(schema=schema_context),
             },
-            {"role": "user", "content": question},
         ]
+        # 添加對話歷史和前一次 SQL 錯誤訊息，讓 LLM 可以修正 SQL
+        for turn in history or []:
+            messages.append({"role": "user", "content": turn.question})
+            messages.append({"role": "assistant", "content": turn.answer})
+        messages.append({"role": "user", "content": question})
         if previous_sql and previous_error:
             messages.append({"role": "assistant", "content": previous_sql})
             messages.append(

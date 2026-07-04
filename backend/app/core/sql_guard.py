@@ -9,6 +9,18 @@ _LIMIT_RE = re.compile(r"\blimit\b", re.IGNORECASE)
 _TABLE_REF_RE = re.compile(
     r"\b(?:from|join)\s+([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)", re.IGNORECASE
 )
+# EXTRACT(MONTH FROM col) 的 FROM 不是子句，要先拿掉再抓表名，否則會誤判
+_DATE_PART_KEYWORDS = (
+    "century", "day", "decade", "dow", "doy", "epoch", "hour", "isodow",
+    "isoyear", "microseconds", "millennium", "milliseconds", "minute",
+    "month", "quarter", "second", "timezone", "timezone_hour",
+    "timezone_minute", "week", "year",
+)
+_EXTRACT_FROM_RE = re.compile(
+    r"\b(?:" + "|".join(_DATE_PART_KEYWORDS) + r")\s+from\s+"
+    r"[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?",
+    re.IGNORECASE,
+)
 _FORBIDDEN_KEYWORDS = (
     "insert", "update", "delete", "drop", "alter", "truncate", "grant",
     "revoke", "create", "copy", "call", "execute", "merge", "vacuum",
@@ -49,5 +61,8 @@ def ensure_safe_select(sql: str, max_rows: int = 200) -> str:
 
 def find_unknown_tables(sql: str) -> list[str]:
     """找出 FROM/JOIN 裡不在白名單內的資料表（多半是 LLM 幻覺出來的表名）。"""
-    referenced = {match.group(1).lower() for match in _TABLE_REF_RE.finditer(sql)}
+    sql_without_date_extract = _EXTRACT_FROM_RE.sub("", sql)
+    referenced = {
+        match.group(1).lower() for match in _TABLE_REF_RE.finditer(sql_without_date_extract)
+    }
     return sorted(referenced - ALLOWED_TABLES)

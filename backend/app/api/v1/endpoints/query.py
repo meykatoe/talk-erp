@@ -11,7 +11,12 @@ from app.core.database import get_readonly_db
 from app.core.llm import IrrelevantQuestionError, LLMClient, get_llm_client
 from app.core.schema_context import SCHEMA_CONTEXT
 from app.core.sql_guard import UnsafeSQLError, ensure_safe_select, find_unknown_tables
-from app.schemas.query import StructuredQueryRequest, StructuredQueryResponse
+from app.schemas.query import (
+    MAX_HISTORY_TURNS,
+    ConversationTurn,
+    StructuredQueryRequest,
+    StructuredQueryResponse,
+)
 
 router = APIRouter(prefix="/query", tags=["query"])
 logger = logging.getLogger("app.query")
@@ -25,7 +30,7 @@ REFUSAL_MESSAGE = (
 
 
 def _generate_and_run_sql(
-    llm: LLMClient, db: Session, question: str
+    llm: LLMClient, db: Session, question: str, history: list[ConversationTurn]
 ) -> tuple[str, list[str], list[dict]]:
     previous_sql: str | None = None
     previous_error: str | None = None
@@ -33,7 +38,10 @@ def _generate_and_run_sql(
 
     for attempt in range(1, MAX_SQL_ATTEMPTS + 1):
         try:
-            generation = llm.generate_sql(question, SCHEMA_CONTEXT, previous_sql, previous_error)
+            # 添加對話歷史和前一次 SQL 錯誤訊息，讓 LLM 可以修正 SQL
+            generation = llm.generate_sql(
+                question, SCHEMA_CONTEXT, history, previous_sql, previous_error
+            )
         except Exception as exc:
             logger.exception("LLM 產生 SQL 失敗 question=%s", question)
             raise HTTPException(status_code=502, detail="LLM 產生 SQL 失敗") from exc
@@ -99,8 +107,9 @@ def query_structured(
     db: Session = Depends(get_readonly_db),
     llm: LLMClient = Depends(get_llm_client),
 ) -> StructuredQueryResponse:
+    history = payload.history[-MAX_HISTORY_TURNS:]
     try:
-        safe_sql, columns, rows = _generate_and_run_sql(llm, db, payload.question)
+        safe_sql, columns, rows = _generate_and_run_sql(llm, db, payload.question, history)
     except IrrelevantQuestionError:
         return StructuredQueryResponse(
             question=payload.question,
@@ -108,6 +117,7 @@ def query_structured(
             columns=[],
             rows=[],
             answer=REFUSAL_MESSAGE,
+            is_relevant=False,
         )
 
     try:
