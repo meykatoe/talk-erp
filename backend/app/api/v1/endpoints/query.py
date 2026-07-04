@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_readonly_db
-from app.core.llm import LLMClient, get_llm_client
+from app.core.llm import IrrelevantQuestionError, LLMClient, get_llm_client
 from app.core.schema_context import SCHEMA_CONTEXT
 from app.core.sql_guard import UnsafeSQLError, ensure_safe_select, find_unknown_tables
 from app.schemas.query import StructuredQueryRequest, StructuredQueryResponse
@@ -17,6 +17,11 @@ router = APIRouter(prefix="/query", tags=["query"])
 logger = logging.getLogger("app.query")
 
 MAX_SQL_ATTEMPTS = 2
+# 回答問題限制
+REFUSAL_MESSAGE = (
+    "這個問題與 ERP 資料查詢（訂單、客戶、產品、庫存、銷售）無關，我無法回答，"
+    "請改問跟系統資料相關的問題。"
+)
 
 
 def _generate_and_run_sql(
@@ -28,18 +33,24 @@ def _generate_and_run_sql(
 
     for attempt in range(1, MAX_SQL_ATTEMPTS + 1):
         try:
-            sql = llm.generate_sql(question, SCHEMA_CONTEXT, previous_sql, previous_error)
+            generation = llm.generate_sql(question, SCHEMA_CONTEXT, previous_sql, previous_error)
         except Exception as exc:
             logger.exception("LLM 產生 SQL 失敗 question=%s", question)
             raise HTTPException(status_code=502, detail="LLM 產生 SQL 失敗") from exc
 
+        if not generation.is_relevant:
+            logger.info(
+                "問題與 ERP 資料無關，拒絕產生 SQL question=%s", question
+            )
+            raise IrrelevantQuestionError()
+
         try:
-            safe_sql = ensure_safe_select(sql)
+            safe_sql = ensure_safe_select(generation.sql)
         except UnsafeSQLError as exc:
             logger.warning(
                 "LLM 產生的 SQL 未通過安全檢查 question=%s sql=%s reason=%s",
                 question,
-                sql,
+                generation.sql,
                 exc,
             )
             raise HTTPException(status_code=422, detail=f"查詢無法執行：{exc}") from exc
@@ -88,7 +99,16 @@ def query_structured(
     db: Session = Depends(get_readonly_db),
     llm: LLMClient = Depends(get_llm_client),
 ) -> StructuredQueryResponse:
-    safe_sql, columns, rows = _generate_and_run_sql(llm, db, payload.question)
+    try:
+        safe_sql, columns, rows = _generate_and_run_sql(llm, db, payload.question)
+    except IrrelevantQuestionError:
+        return StructuredQueryResponse(
+            question=payload.question,
+            sql="",
+            columns=[],
+            rows=[],
+            answer=REFUSAL_MESSAGE,
+        )
 
     try:
         answer = llm.generate_answer(payload.question, safe_sql, rows)

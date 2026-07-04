@@ -2,19 +2,23 @@
 
 import json
 from functools import lru_cache
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from openai import OpenAI
 
 from app.core.config import Settings, get_settings
 
-_SQL_SYSTEM_PROMPT = """你是 PostgreSQL 專家，負責把使用者的自然語言問題轉換成一句 SQL 查詢。
+_SQL_SYSTEM_PROMPT = """你是 ERP 系統的 Text-to-SQL 助理，只負責把「跟訂單、客戶、產品、庫存、銷售等 ERP 資料庫查詢相關」的問題轉換成 PostgreSQL SQL。
 
-規則：
+第一步，判斷問題是否屬於上述 ERP 資料查詢範疇：
+- 若問題與 ERP 資料庫查詢無關（例如要求寫程式碼、閒聊、翻譯、通用知識問答、與這個資料庫無關的任何請求），把 is_relevant 設為 false，sql 留空字串，不要嘗試生成 SQL
+- 只有問題確實是在問這個資料庫裡的資料時，才把 is_relevant 設為 true 並依下列規則產生 SQL
+
+SQL 規則：
 1. 只能使用下方提供的資料表與欄位，不可捏造不存在的表或欄位
 2. 只能產生單一條 SELECT 敘述（可用 WITH CTE），禁止任何會修改資料的語法
 3. 資料表需加上 schema 前綴（例如 sales.salesorderheader）
-4. 只回傳 SQL 本身，不要加上任何說明文字、markdown 或 SQL 註解
+4. sql 欄位只放 SQL 本身，不要加上任何說明文字、markdown 或 SQL 註解
 5. 每個別名只能引用「該別名對應表格實際擁有」的欄位；欄位屬於別的表格時要先 JOIN 到那張表，不可憑印象假設某別名有其他表格的欄位
 6. 需要用到 CTE 以外的衍生欄位（例如分類名稱）時，該欄位必須先在 CTE 的 SELECT 中列出並往上層傳遞，不可在上層直接引用 CTE 沒有輸出的欄位
 
@@ -26,11 +30,23 @@ SQL：SELECT pc.name AS category_name, SUM(sod.unitprice * sod.orderqty * (1 - s
 
 問題：哪些客戶的訂單總金額超過 5000
 SQL：SELECT so.customerid, SUM(so.totaldue) AS total_due FROM sales.salesorderheader so GROUP BY so.customerid HAVING SUM(so.totaldue) > 5000 ORDER BY total_due DESC
+
+問題：幫我寫一段 Python 氣泡排序程式碼
+（與 ERP 資料查詢無關 -> is_relevant: false, sql: ""）
 """
 
 _ANSWER_SYSTEM_PROMPT = """你是 ERP 系統的資料助理，請根據 SQL 查詢結果，用繁體中文簡潔地回答使用者的問題。
 如果查詢結果是空的，請直接說明查無資料，不要編造內容。
 """
+
+
+class IrrelevantQuestionError(Exception):
+    """問題與 ERP 資料查詢無關，LLM 判斷後拒絕產生 SQL。"""
+
+
+class SqlGeneration(NamedTuple):
+    is_relevant: bool
+    sql: str
 
 
 class LLMClient(Protocol):
@@ -40,7 +56,7 @@ class LLMClient(Protocol):
         schema_context: str,
         previous_sql: str | None = None,
         previous_error: str | None = None,
-    ) -> str: ...
+    ) -> SqlGeneration: ...
 
     def generate_answer(self, question: str, sql: str, rows: list[dict]) -> str: ...
 
@@ -56,7 +72,7 @@ class OpenAILLMClient:
         schema_context: str,
         previous_sql: str | None = None,
         previous_error: str | None = None,
-    ) -> str:
+    ) -> SqlGeneration:
         messages = [
             {
                 "role": "system",
@@ -84,8 +100,11 @@ class OpenAILLMClient:
                     "name": "sql_query",
                     "schema": {
                         "type": "object",
-                        "properties": {"sql": {"type": "string"}},
-                        "required": ["sql"],
+                        "properties": {
+                            "is_relevant": {"type": "boolean"},
+                            "sql": {"type": "string"},
+                        },
+                        "required": ["is_relevant", "sql"],
                         "additionalProperties": False,
                     },
                     "strict": True,
@@ -95,7 +114,8 @@ class OpenAILLMClient:
             max_tokens=500,
         )
         content = response.choices[0].message.content or "{}"
-        return json.loads(content)["sql"]
+        data = json.loads(content)
+        return SqlGeneration(is_relevant=data["is_relevant"], sql=data["sql"])
 
     def generate_answer(self, question: str, sql: str, rows: list[dict]) -> str:
         payload = json.dumps(rows[:20], ensure_ascii=False, default=str)
