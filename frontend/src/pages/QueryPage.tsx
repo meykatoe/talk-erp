@@ -2,8 +2,10 @@ import { useState } from 'react';
 import { postStructuredQuery } from '../api/query';
 import { DataTable } from '../components/common/DataTable';
 import { downloadCsv } from '../utils/csv';
+import type { ConversationTurn } from '../types/query';
 
 const ROW_PREVIEW_LIMIT = 5;
+const MAX_HISTORY_TURNS = 3;
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -17,6 +19,7 @@ interface ChatMessage {
 export function QueryPage() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [history, setHistory] = useState<ConversationTurn[]>([]);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -29,7 +32,7 @@ export function QueryPage() {
     setLoading(true);
 
     try {
-      const result = await postStructuredQuery(question);
+      const result = await postStructuredQuery(question, history);
       setMessages((prev) => [
         ...prev,
         {
@@ -41,6 +44,10 @@ export function QueryPage() {
           rows: result.rows,
         },
       ]);
+      // 拒答的回合不列入記憶，避免污染後續上下文
+      if (result.is_relevant) {
+        setHistory((prev) => [...prev, { question, answer: result.answer }].slice(-MAX_HISTORY_TURNS));
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : '未知錯誤';
       setMessages((prev) => [
