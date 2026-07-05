@@ -1,6 +1,7 @@
 """LLM 抽象層，把 Text-to-SQL 與回答生成包起來，方便之後替換供應商。"""
 
 import json
+from datetime import date
 from functools import lru_cache
 from typing import NamedTuple, Protocol
 
@@ -10,6 +11,8 @@ from app.core.config import Settings, get_settings
 from app.schemas.query import ConversationTurn
 
 _SQL_SYSTEM_PROMPT = """你是 ERP 系統的 Text-to-SQL 助理，只負責把「跟訂單、客戶、產品、庫存、銷售等 ERP 資料庫查詢相關」的問題轉換成 PostgreSQL SQL。
+
+今天日期是 {today}。
 
 第一步，判斷問題是否屬於上述 ERP 資料查詢範疇：
 - 若問題與 ERP 資料庫查詢無關（例如要求寫程式碼、閒聊、翻譯、通用知識問答、與這個資料庫無關的任何請求），把 is_relevant 設為 false，sql 留空字串，不要嘗試生成 SQL
@@ -23,6 +26,7 @@ SQL 規則：
 5. 每個別名只能引用「該別名對應表格實際擁有」的欄位；欄位屬於別的表格時要先 JOIN 到那張表，不可憑印象假設某別名有其他表格的欄位
 6. 需要用到 CTE 以外的衍生欄位（例如分類名稱）時，該欄位必須先在 CTE 的 SELECT 中列出並往上層傳遞，不可在上層直接引用 CTE 沒有輸出的欄位
 7. 對話中之前的問題與回答（如果有）可作為上下文，使用者的後續提問可能是針對前一題的追問或延伸（例如先問「6月銷售情況」，接著問「平均值呢」，就是要問 6 月銷售額的平均值），請依照對話脈絡推斷完整意圖再產生 SQL
+8. 使用者提到「今年」「去年」「前年」「上個月」「最近」等相對時間詞時，一律以上方「今天日期」為基準換算，不可用對話歷史裡提過的年份/月份當作基準（例如今天日期若是 2026 年，「去年」就是 2025 年，不會因為之前問過 2022 年就把「去年」當成 2021 年）
 
 {schema}
 
@@ -80,7 +84,9 @@ class OpenAILLMClient:
         messages = [
             {
                 "role": "system",
-                "content": _SQL_SYSTEM_PROMPT.format(schema=schema_context),
+                "content": _SQL_SYSTEM_PROMPT.format(
+                    schema=schema_context, today=date.today().isoformat()
+                ),
             },
         ]
         # 添加對話歷史和前一次 SQL 錯誤訊息，讓 LLM 可以修正 SQL
